@@ -1,11 +1,14 @@
 package go_salesforce_api_client_test
 
 import (
+	"strings"
 	"testing"
 
 	go_salesforce_api_client "github.com/MASA-JAPAN/go-salesforce-api-client"
 	"github.com/MASA-JAPAN/go-salesforce-emulator/pkg/auth"
 	sfemulator "github.com/MASA-JAPAN/go-salesforce-emulator/pkg/emulator"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAuthenticatePassword_WithEmulator(t *testing.T) {
@@ -22,7 +25,7 @@ func TestAuthenticatePassword_WithEmulator(t *testing.T) {
 	emu.Start()
 	defer emu.Stop()
 
-	auth := go_salesforce_api_client.Auth{
+	authConfig := go_salesforce_api_client.Auth{
 		ClientID:     "test_client_id",
 		ClientSecret: "test_client_secret",
 		Username:     "test@example.com",
@@ -30,18 +33,11 @@ func TestAuthenticatePassword_WithEmulator(t *testing.T) {
 		TokenURL:     emu.URL() + "/services/oauth2/token",
 	}
 
-	client, err := auth.AuthenticatePassword()
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if client.AccessToken == "" {
-		t.Error("Expected access token to be set")
-	}
-
-	if client.InstanceURL == "" {
-		t.Error("Expected instance URL to be set")
-	}
+	client, err := authConfig.AuthenticatePassword()
+	require.NoError(t, err)
+	assert.NotEmpty(t, client.AccessToken, "Access token should be set")
+	assert.NotEmpty(t, client.InstanceURL, "Instance URL should be set")
+	assert.True(t, strings.HasPrefix(client.InstanceURL, "http"), "Instance URL should be a valid URL")
 }
 
 func TestAuthenticatePassword_InvalidCredentials(t *testing.T) {
@@ -58,7 +54,7 @@ func TestAuthenticatePassword_InvalidCredentials(t *testing.T) {
 	emu.Start()
 	defer emu.Stop()
 
-	auth := go_salesforce_api_client.Auth{
+	authConfig := go_salesforce_api_client.Auth{
 		ClientID:     "wrong_client_id",
 		ClientSecret: "wrong_client_secret",
 		Username:     "wrong@example.com",
@@ -66,10 +62,9 @@ func TestAuthenticatePassword_InvalidCredentials(t *testing.T) {
 		TokenURL:     emu.URL() + "/services/oauth2/token",
 	}
 
-	_, err := auth.AuthenticatePassword()
-	if err == nil {
-		t.Error("Expected error for invalid credentials, got nil")
-	}
+	client, err := authConfig.AuthenticatePassword()
+	require.Error(t, err, "Should return error for invalid credentials")
+	assert.Nil(t, client, "Client should be nil on authentication failure")
 }
 
 func TestAuthenticateClientCredentials_WithEmulator(t *testing.T) {
@@ -84,20 +79,16 @@ func TestAuthenticateClientCredentials_WithEmulator(t *testing.T) {
 	emu.Start()
 	defer emu.Stop()
 
-	auth := go_salesforce_api_client.Auth{
+	authConfig := go_salesforce_api_client.Auth{
 		ClientID:     "cc_client_id",
 		ClientSecret: "cc_client_secret",
 		TokenURL:     emu.URL() + "/services/oauth2/token",
 	}
 
-	client, err := auth.AuthenticateClientCredentials()
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if client.AccessToken == "" {
-		t.Error("Expected access token to be set")
-	}
+	client, err := authConfig.AuthenticateClientCredentials()
+	require.NoError(t, err)
+	assert.NotEmpty(t, client.AccessToken, "Access token should be set")
+	assert.NotEmpty(t, client.InstanceURL, "Instance URL should be set")
 }
 
 func TestQuery_WithEmulator(t *testing.T) {
@@ -123,21 +114,18 @@ func TestQuery_WithEmulator(t *testing.T) {
 	}
 
 	resp, err := client.Query("SELECT Id, Name, Industry FROM Account")
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 2, resp.TotalSize, "Should return 2 records")
+	assert.True(t, resp.Done, "Query should be done")
+	assert.Len(t, resp.Records, 2, "Should have 2 records")
 
-	if resp.TotalSize != 2 {
-		t.Errorf("Expected TotalSize 2, got: %d", resp.TotalSize)
+	names := make([]string, len(resp.Records))
+	for i, r := range resp.Records {
+		names[i] = r["Name"].(string)
+		assert.NotEmpty(t, r["Id"], "Each record should have an Id")
 	}
-
-	if !resp.Done {
-		t.Error("Expected Done to be true")
-	}
-
-	if len(resp.Records) != 2 {
-		t.Errorf("Expected 2 records, got: %d", len(resp.Records))
-	}
+	assert.Contains(t, names, "Acme Corporation")
+	assert.Contains(t, names, "Global Industries")
 }
 
 func TestQuery_WithWhereClause(t *testing.T) {
@@ -163,21 +151,10 @@ func TestQuery_WithWhereClause(t *testing.T) {
 	}
 
 	resp, err := client.Query("SELECT Id, Name FROM Account WHERE Industry = 'Technology'")
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if resp.TotalSize != 1 {
-		t.Errorf("Expected TotalSize 1, got: %d", resp.TotalSize)
-	}
-
-	if len(resp.Records) != 1 {
-		t.Errorf("Expected 1 record, got: %d", len(resp.Records))
-	}
-
-	if resp.Records[0]["Name"] != "Tech Corp" {
-		t.Errorf("Expected Name 'Tech Corp', got: %v", resp.Records[0]["Name"])
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.TotalSize, "Should filter to 1 record")
+	require.Len(t, resp.Records, 1)
+	assert.Equal(t, "Tech Corp", resp.Records[0]["Name"])
 }
 
 func TestQuery_EmptyResult(t *testing.T) {
@@ -193,17 +170,10 @@ func TestQuery_EmptyResult(t *testing.T) {
 	}
 
 	resp, err := client.Query("SELECT Id, Name FROM Account")
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if resp.TotalSize != 0 {
-		t.Errorf("Expected TotalSize 0, got: %d", resp.TotalSize)
-	}
-
-	if len(resp.Records) != 0 {
-		t.Errorf("Expected 0 records, got: %d", len(resp.Records))
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 0, resp.TotalSize, "Should return 0 for empty result")
+	assert.Empty(t, resp.Records, "Records should be empty")
+	assert.True(t, resp.Done, "Query should be done even with no results")
 }
 
 func TestCreateRecord_WithEmulator(t *testing.T) {
@@ -224,17 +194,16 @@ func TestCreateRecord_WithEmulator(t *testing.T) {
 	}
 
 	resp, err := client.CreateRecord("Account", record)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.ID, "Created record should have an ID")
+	assert.True(t, resp.Success, "Create should be successful")
+	assert.Empty(t, resp.Errors, "Should have no errors")
 
-	if resp.ID == "" {
-		t.Error("Expected ID to be set")
-	}
-
-	if !resp.Success {
-		t.Error("Expected Success to be true")
-	}
+	// Verify the record was actually created
+	created, err := client.GetRecord("Account", resp.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "New Account", created["Name"])
+	assert.Equal(t, "Healthcare", created["Industry"])
 }
 
 func TestGetRecord_WithEmulator(t *testing.T) {
@@ -256,17 +225,10 @@ func TestGetRecord_WithEmulator(t *testing.T) {
 	}
 
 	record, err := client.GetRecord("Account", id)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if record["Name"] != "Test Account" {
-		t.Errorf("Expected Name 'Test Account', got: %v", record["Name"])
-	}
-
-	if record["Industry"] != "Finance" {
-		t.Errorf("Expected Industry 'Finance', got: %v", record["Industry"])
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "Test Account", record["Name"])
+	assert.Equal(t, "Finance", record["Industry"])
+	assert.Equal(t, id, record["Id"], "Record ID should match")
 }
 
 func TestGetRecord_NotFound(t *testing.T) {
@@ -281,10 +243,9 @@ func TestGetRecord_NotFound(t *testing.T) {
 		InstanceURL: emu.URL(),
 	}
 
-	_, err := client.GetRecord("Account", "001NONEXISTENT")
-	if err == nil {
-		t.Error("Expected error for non-existent record, got nil")
-	}
+	record, err := client.GetRecord("Account", "001NONEXISTENT")
+	require.Error(t, err, "Should return error for non-existent record")
+	assert.Nil(t, record, "Record should be nil when not found")
 }
 
 func TestUpdateRecord_WithEmulator(t *testing.T) {
@@ -310,18 +271,12 @@ func TestUpdateRecord_WithEmulator(t *testing.T) {
 	}
 
 	err := client.UpdateRecord("Account", id, updates)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	require.NoError(t, err)
 
-	record, _ := client.GetRecord("Account", id)
-	if record["Name"] != "Updated Name" {
-		t.Errorf("Expected Name 'Updated Name', got: %v", record["Name"])
-	}
-
-	if record["Industry"] != "Tech" {
-		t.Errorf("Expected Industry 'Tech' to remain unchanged, got: %v", record["Industry"])
-	}
+	record, err := client.GetRecord("Account", id)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated Name", record["Name"], "Name should be updated")
+	assert.Equal(t, "Tech", record["Industry"], "Industry should remain unchanged")
 }
 
 func TestDeleteRecord_WithEmulator(t *testing.T) {
@@ -341,15 +296,16 @@ func TestDeleteRecord_WithEmulator(t *testing.T) {
 		InstanceURL: emu.URL(),
 	}
 
-	err := client.DeleteRecord("Account", id)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	// Verify record exists before deletion
+	_, err := client.GetRecord("Account", id)
+	require.NoError(t, err, "Record should exist before deletion")
 
+	err = client.DeleteRecord("Account", id)
+	require.NoError(t, err)
+
+	// Verify record no longer exists
 	_, err = client.GetRecord("Account", id)
-	if err == nil {
-		t.Error("Expected error after deletion, got nil")
-	}
+	assert.Error(t, err, "Record should not exist after deletion")
 }
 
 func TestDescribeSObject_WithEmulator(t *testing.T) {
@@ -365,13 +321,9 @@ func TestDescribeSObject_WithEmulator(t *testing.T) {
 	}
 
 	describe, err := client.DescribeSObject("Account")
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if describe["name"] != "Account" {
-		t.Errorf("Expected name 'Account', got: %v", describe["name"])
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "Account", describe["name"], "Object name should be Account")
+	assert.NotNil(t, describe["fields"], "Should include fields metadata")
 }
 
 func TestCreateRecords_WithEmulator(t *testing.T) {
@@ -393,27 +345,21 @@ func TestCreateRecords_WithEmulator(t *testing.T) {
 	}
 
 	resp, err := client.CreateRecords("Account", records)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	require.NoError(t, err)
+	require.Len(t, resp, 3, "Should return 3 responses")
 
-	if len(resp) != 3 {
-		t.Errorf("Expected 3 responses, got: %d", len(resp))
-	}
-
+	createdIDs := make([]string, len(resp))
 	for i, r := range resp {
-		if !r.Success {
-			t.Errorf("Expected record %d to be successful", i)
-		}
-		if r.ID == "" {
-			t.Errorf("Expected record %d to have an ID", i)
-		}
+		assert.True(t, r.Success, "Record %d should be successful", i)
+		assert.NotEmpty(t, r.ID, "Record %d should have an ID", i)
+		assert.Empty(t, r.Errors, "Record %d should have no errors", i)
+		createdIDs[i] = r.ID
 	}
 
-	queryResp, _ := client.Query("SELECT Id, Name FROM Account")
-	if queryResp.TotalSize != 3 {
-		t.Errorf("Expected 3 records in database, got: %d", queryResp.TotalSize)
-	}
+	// Verify all records exist
+	queryResp, err := client.Query("SELECT Id, Name FROM Account")
+	require.NoError(t, err)
+	assert.Equal(t, 3, queryResp.TotalSize, "Should have 3 records in database")
 }
 
 func TestUpdateRecords_WithEmulator(t *testing.T) {
@@ -438,19 +384,15 @@ func TestUpdateRecords_WithEmulator(t *testing.T) {
 	}
 
 	err := client.UpdateRecords("Account", updates)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	require.NoError(t, err)
 
-	record1, _ := client.GetRecord("Account", id1)
-	if record1["Name"] != "Updated Account 1" {
-		t.Errorf("Expected Name 'Updated Account 1', got: %v", record1["Name"])
-	}
+	record1, err := client.GetRecord("Account", id1)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated Account 1", record1["Name"])
 
-	record2, _ := client.GetRecord("Account", id2)
-	if record2["Name"] != "Updated Account 2" {
-		t.Errorf("Expected Name 'Updated Account 2', got: %v", record2["Name"])
-	}
+	record2, err := client.GetRecord("Account", id2)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated Account 2", record2["Name"])
 }
 
 func TestDeleteRecords_WithEmulator(t *testing.T) {
@@ -469,15 +411,16 @@ func TestDeleteRecords_WithEmulator(t *testing.T) {
 		InstanceURL: emu.URL(),
 	}
 
-	err := client.DeleteRecords("Account", []string{id1, id2})
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
+	// Verify records exist
 	queryResp, _ := client.Query("SELECT Id FROM Account")
-	if queryResp.TotalSize != 0 {
-		t.Errorf("Expected 0 records after deletion, got: %d", queryResp.TotalSize)
-	}
+	assert.Equal(t, 2, queryResp.TotalSize, "Should have 2 records before deletion")
+
+	err := client.DeleteRecords("Account", []string{id1, id2})
+	require.NoError(t, err)
+
+	queryResp, err = client.Query("SELECT Id FROM Account")
+	require.NoError(t, err)
+	assert.Equal(t, 0, queryResp.TotalSize, "Should have 0 records after deletion")
 }
 
 func TestCreateJobQuery_WithEmulator(t *testing.T) {
@@ -496,17 +439,10 @@ func TestCreateJobQuery_WithEmulator(t *testing.T) {
 	}
 
 	resp, err := client.CreateJobQuery("SELECT Id, Name FROM Account")
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if resp.ID == "" {
-		t.Error("Expected job ID to be set")
-	}
-
-	if resp.Object != "Account" {
-		t.Errorf("Expected Object 'Account', got: %s", resp.Object)
-	}
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.ID, "Job ID should be set")
+	assert.Equal(t, "Account", resp.Object, "Object should be Account")
+	assert.NotEmpty(t, resp.State, "State should be set")
 }
 
 func TestGetJobQuery_WithEmulator(t *testing.T) {
@@ -521,16 +457,14 @@ func TestGetJobQuery_WithEmulator(t *testing.T) {
 		InstanceURL: emu.URL(),
 	}
 
-	createResp, _ := client.CreateJobQuery("SELECT Id FROM Account")
+	createResp, err := client.CreateJobQuery("SELECT Id FROM Account")
+	require.NoError(t, err)
 
 	resp, err := client.GetJobQuery(createResp.ID)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if resp.ID != createResp.ID {
-		t.Errorf("Expected ID %s, got: %s", createResp.ID, resp.ID)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, createResp.ID, resp.ID, "Job ID should match")
+	assert.NotEmpty(t, resp.State, "State should be set")
+	assert.Equal(t, "Account", resp.Object, "Object should match")
 }
 
 func TestAbortJobQuery_WithEmulator(t *testing.T) {
@@ -545,17 +479,15 @@ func TestAbortJobQuery_WithEmulator(t *testing.T) {
 		InstanceURL: emu.URL(),
 	}
 
-	createResp, _ := client.CreateJobQuery("SELECT Id FROM Account")
+	createResp, err := client.CreateJobQuery("SELECT Id FROM Account")
+	require.NoError(t, err)
 
-	err := client.AbortJobQuery(createResp.ID)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	err = client.AbortJobQuery(createResp.ID)
+	require.NoError(t, err)
 
-	jobResp, _ := client.GetJobQuery(createResp.ID)
-	if jobResp.State != "Aborted" {
-		t.Errorf("Expected State 'Aborted', got: %s", jobResp.State)
-	}
+	jobResp, err := client.GetJobQuery(createResp.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Aborted", jobResp.State, "Job state should be Aborted")
 }
 
 func TestDeleteJobQuery_WithEmulator(t *testing.T) {
@@ -570,12 +502,15 @@ func TestDeleteJobQuery_WithEmulator(t *testing.T) {
 		InstanceURL: emu.URL(),
 	}
 
-	createResp, _ := client.CreateJobQuery("SELECT Id FROM Account")
+	createResp, err := client.CreateJobQuery("SELECT Id FROM Account")
+	require.NoError(t, err)
 
-	err := client.DeleteJobQuery(createResp.ID)
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	err = client.DeleteJobQuery(createResp.ID)
+	require.NoError(t, err)
+
+	// Verify job is deleted by trying to get it
+	_, err = client.GetJobQuery(createResp.ID)
+	assert.Error(t, err, "Should return error for deleted job")
 }
 
 func TestQueryToolingAPI_WithEmulator(t *testing.T) {
@@ -591,13 +526,9 @@ func TestQueryToolingAPI_WithEmulator(t *testing.T) {
 	}
 
 	resp, err := client.QueryToolingAPI("SELECT Id, Name FROM ApexClass")
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if !resp.Done {
-		t.Error("Expected Done to be true")
-	}
+	require.NoError(t, err)
+	assert.True(t, resp.Done, "Tooling API query should be done")
+	assert.NotNil(t, resp.Records, "Records should not be nil")
 }
 
 func TestGetLimits_WithEmulator(t *testing.T) {
@@ -613,31 +544,20 @@ func TestGetLimits_WithEmulator(t *testing.T) {
 	}
 
 	limits, err := client.GetLimits()
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if limits == nil {
-		t.Error("Expected limits to be non-nil")
-	}
+	require.NoError(t, err)
+	require.NotNil(t, limits, "Limits should not be nil")
 
 	dailyRequests, ok := limits["DailyApiRequests"]
-	if !ok {
-		t.Error("Expected DailyApiRequests to be present")
-	}
+	require.True(t, ok, "DailyApiRequests should be present")
 
 	dailyMap, ok := dailyRequests.(map[string]interface{})
-	if !ok {
-		t.Error("Expected DailyApiRequests to be a map")
-	}
+	require.True(t, ok, "DailyApiRequests should be a map")
 
-	if _, ok := dailyMap["Max"]; !ok {
-		t.Error("Expected Max field in DailyApiRequests")
-	}
+	_, hasMax := dailyMap["Max"]
+	assert.True(t, hasMax, "Should have Max field")
 
-	if _, ok := dailyMap["Remaining"]; !ok {
-		t.Error("Expected Remaining field in DailyApiRequests")
-	}
+	_, hasRemaining := dailyMap["Remaining"]
+	assert.True(t, hasRemaining, "Should have Remaining field")
 }
 
 func TestSObjectCRUD_FullWorkflow(t *testing.T) {
@@ -652,52 +572,46 @@ func TestSObjectCRUD_FullWorkflow(t *testing.T) {
 		InstanceURL: emu.URL(),
 	}
 
+	// CREATE
 	createResp, err := client.CreateRecord("Account", map[string]interface{}{
 		"Name":     "Workflow Test Account",
 		"Industry": "Technology",
 	})
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
+	require.NoError(t, err, "Create should succeed")
+	assert.True(t, createResp.Success)
 	accountID := createResp.ID
+	assert.NotEmpty(t, accountID)
 
+	// READ
 	record, err := client.GetRecord("Account", accountID)
-	if err != nil {
-		t.Fatalf("Get failed: %v", err)
-	}
-	if record["Name"] != "Workflow Test Account" {
-		t.Errorf("Expected Name 'Workflow Test Account', got: %v", record["Name"])
-	}
+	require.NoError(t, err, "Read should succeed")
+	assert.Equal(t, "Workflow Test Account", record["Name"])
+	assert.Equal(t, "Technology", record["Industry"])
 
+	// UPDATE
 	err = client.UpdateRecord("Account", accountID, map[string]interface{}{
 		"Industry": "Finance",
 	})
-	if err != nil {
-		t.Fatalf("Update failed: %v", err)
-	}
+	require.NoError(t, err, "Update should succeed")
 
-	record, _ = client.GetRecord("Account", accountID)
-	if record["Industry"] != "Finance" {
-		t.Errorf("Expected Industry 'Finance', got: %v", record["Industry"])
-	}
+	record, err = client.GetRecord("Account", accountID)
+	require.NoError(t, err)
+	assert.Equal(t, "Finance", record["Industry"], "Industry should be updated")
+	assert.Equal(t, "Workflow Test Account", record["Name"], "Name should remain unchanged")
 
+	// QUERY
 	queryResp, err := client.Query("SELECT Id, Name, Industry FROM Account WHERE Id = '" + accountID + "'")
-	if err != nil {
-		t.Fatalf("Query failed: %v", err)
-	}
-	if queryResp.TotalSize != 1 {
-		t.Errorf("Expected 1 record, got: %d", queryResp.TotalSize)
-	}
+	require.NoError(t, err, "Query should succeed")
+	assert.Equal(t, 1, queryResp.TotalSize)
+	assert.Equal(t, accountID, queryResp.Records[0]["Id"])
 
+	// DELETE
 	err = client.DeleteRecord("Account", accountID)
-	if err != nil {
-		t.Fatalf("Delete failed: %v", err)
-	}
+	require.NoError(t, err, "Delete should succeed")
 
+	// VERIFY DELETION
 	_, err = client.GetRecord("Account", accountID)
-	if err == nil {
-		t.Error("Expected error after deletion")
-	}
+	assert.Error(t, err, "Record should not exist after deletion")
 }
 
 func TestContactRelationship_WithEmulator(t *testing.T) {
@@ -712,30 +626,28 @@ func TestContactRelationship_WithEmulator(t *testing.T) {
 		InstanceURL: emu.URL(),
 	}
 
+	// Create parent Account
 	accountResp, err := client.CreateRecord("Account", map[string]interface{}{
 		"Name": "Parent Account",
 	})
-	if err != nil {
-		t.Fatalf("Failed to create Account: %v", err)
-	}
+	require.NoError(t, err)
+	assert.True(t, accountResp.Success)
 
+	// Create child Contact with relationship
 	contactResp, err := client.CreateRecord("Contact", map[string]interface{}{
 		"FirstName": "John",
 		"LastName":  "Doe",
 		"AccountId": accountResp.ID,
 	})
-	if err != nil {
-		t.Fatalf("Failed to create Contact: %v", err)
-	}
+	require.NoError(t, err)
+	assert.True(t, contactResp.Success)
 
+	// Verify relationship
 	contact, err := client.GetRecord("Contact", contactResp.ID)
-	if err != nil {
-		t.Fatalf("Failed to get Contact: %v", err)
-	}
-
-	if contact["AccountId"] != accountResp.ID {
-		t.Errorf("Expected AccountId %s, got: %v", accountResp.ID, contact["AccountId"])
-	}
+	require.NoError(t, err)
+	assert.Equal(t, accountResp.ID, contact["AccountId"], "Contact should be linked to Account")
+	assert.Equal(t, "John", contact["FirstName"])
+	assert.Equal(t, "Doe", contact["LastName"])
 }
 
 func TestQuery_WithOrderBy(t *testing.T) {
@@ -756,21 +668,12 @@ func TestQuery_WithOrderBy(t *testing.T) {
 	}
 
 	resp, err := client.Query("SELECT Id, Name FROM Account ORDER BY Name ASC")
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	require.NoError(t, err)
+	require.Len(t, resp.Records, 3)
 
-	if len(resp.Records) != 3 {
-		t.Fatalf("Expected 3 records, got: %d", len(resp.Records))
-	}
-
-	if resp.Records[0]["Name"] != "Alpha Inc" {
-		t.Errorf("Expected first record to be 'Alpha Inc', got: %v", resp.Records[0]["Name"])
-	}
-
-	if resp.Records[2]["Name"] != "Zebra Corp" {
-		t.Errorf("Expected last record to be 'Zebra Corp', got: %v", resp.Records[2]["Name"])
-	}
+	assert.Equal(t, "Alpha Inc", resp.Records[0]["Name"], "First record should be Alpha Inc")
+	assert.Equal(t, "Beta LLC", resp.Records[1]["Name"], "Second record should be Beta LLC")
+	assert.Equal(t, "Zebra Corp", resp.Records[2]["Name"], "Third record should be Zebra Corp")
 }
 
 func TestQuery_WithLimit(t *testing.T) {
@@ -791,13 +694,8 @@ func TestQuery_WithLimit(t *testing.T) {
 	}
 
 	resp, err := client.Query("SELECT Id, Name FROM Account LIMIT 5")
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
-
-	if len(resp.Records) != 5 {
-		t.Errorf("Expected 5 records, got: %d", len(resp.Records))
-	}
+	require.NoError(t, err)
+	assert.Len(t, resp.Records, 5, "Should return exactly 5 records with LIMIT")
 }
 
 func TestQuery_WithLikeOperator(t *testing.T) {
@@ -818,12 +716,12 @@ func TestQuery_WithLikeOperator(t *testing.T) {
 	}
 
 	resp, err := client.Query("SELECT Id, Name FROM Account WHERE Name LIKE 'Acme%'")
-	if err != nil {
-		t.Fatalf("Expected no error, got: %v", err)
-	}
+	require.NoError(t, err)
+	assert.Len(t, resp.Records, 2, "Should find 2 records matching 'Acme%%'")
 
-	if len(resp.Records) != 2 {
-		t.Errorf("Expected 2 records matching 'Acme%%', got: %d", len(resp.Records))
+	for _, r := range resp.Records {
+		name := r["Name"].(string)
+		assert.True(t, strings.HasPrefix(name, "Acme"), "All results should start with 'Acme'")
 	}
 }
 
@@ -839,40 +737,64 @@ func TestMultipleObjectTypes_WithEmulator(t *testing.T) {
 		InstanceURL: emu.URL(),
 	}
 
-	_, err := client.CreateRecord("Account", map[string]interface{}{"Name": "Test Account"})
-	if err != nil {
-		t.Fatalf("Failed to create Account: %v", err)
-	}
+	// Create different object types
+	accountResp, err := client.CreateRecord("Account", map[string]interface{}{"Name": "Test Account"})
+	require.NoError(t, err)
+	assert.True(t, accountResp.Success)
 
-	_, err = client.CreateRecord("Contact", map[string]interface{}{
+	contactResp, err := client.CreateRecord("Contact", map[string]interface{}{
 		"FirstName": "Jane",
 		"LastName":  "Smith",
 	})
-	if err != nil {
-		t.Fatalf("Failed to create Contact: %v", err)
-	}
+	require.NoError(t, err)
+	assert.True(t, contactResp.Success)
 
-	_, err = client.CreateRecord("Lead", map[string]interface{}{
+	leadResp, err := client.CreateRecord("Lead", map[string]interface{}{
 		"FirstName": "Bob",
 		"LastName":  "Johnson",
 		"Company":   "Test Company",
 	})
-	if err != nil {
-		t.Fatalf("Failed to create Lead: %v", err)
+	require.NoError(t, err)
+	assert.True(t, leadResp.Success)
+
+	// Verify each object type is stored separately
+	accountQuery, err := client.Query("SELECT Id FROM Account")
+	require.NoError(t, err)
+	assert.Equal(t, 1, accountQuery.TotalSize, "Should have 1 Account")
+
+	contactQuery, err := client.Query("SELECT Id FROM Contact")
+	require.NoError(t, err)
+	assert.Equal(t, 1, contactQuery.TotalSize, "Should have 1 Contact")
+
+	leadQuery, err := client.Query("SELECT Id FROM Lead")
+	require.NoError(t, err)
+	assert.Equal(t, 1, leadQuery.TotalSize, "Should have 1 Lead")
+}
+
+func TestQuery_MissingAuth(t *testing.T) {
+	t.Parallel()
+
+	emu := sfemulator.New()
+	emu.Start()
+	defer emu.Stop()
+
+	client := &go_salesforce_api_client.Client{
+		AccessToken: "",
+		InstanceURL: emu.URL(),
 	}
 
-	accountResp, _ := client.Query("SELECT Id FROM Account")
-	if accountResp.TotalSize != 1 {
-		t.Errorf("Expected 1 Account, got: %d", accountResp.TotalSize)
+	_, err := client.Query("SELECT Id FROM Account")
+	assert.Error(t, err, "Should return error when access token is missing")
+}
+
+func TestCreateRecord_MissingAuth(t *testing.T) {
+	t.Parallel()
+
+	client := &go_salesforce_api_client.Client{
+		AccessToken: "",
+		InstanceURL: "",
 	}
 
-	contactResp, _ := client.Query("SELECT Id FROM Contact")
-	if contactResp.TotalSize != 1 {
-		t.Errorf("Expected 1 Contact, got: %d", contactResp.TotalSize)
-	}
-
-	leadResp, _ := client.Query("SELECT Id FROM Lead")
-	if leadResp.TotalSize != 1 {
-		t.Errorf("Expected 1 Lead, got: %d", leadResp.TotalSize)
-	}
+	_, err := client.CreateRecord("Account", map[string]interface{}{"Name": "Test"})
+	assert.Error(t, err, "Should return error when authentication is missing")
 }
